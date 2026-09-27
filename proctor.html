@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>RRCI Nexus - Camera Proctor</title>
+<style>
+:root{--bg:#0f172a;--card:#fff;--muted:#64748b;--line:#e2e8f0;--brand:#4f46e5;--ok:#16a34a;--bad:#dc2626;--warn:#d97706;--soft:#f1f5f9}
+*{box-sizing:border-box}html,body{margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:linear-gradient(160deg,#eef2ff,#f8fafc);color:#0f172a;min-height:100vh}
+.wrap{max-width:360px;margin:0 auto;padding:14px}
+.brand{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.brand .logo{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#d926c4,#7c3aed 48%,#2563eb);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;font-size:19px;font-family:Georgia,serif}
+.brand b{font-size:15px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 8px 24px rgba(15,23,42,.08);padding:16px}
+h1{font-size:16px;margin:0 0 4px}
+.sub{color:var(--muted);font-size:12px;margin:0 0 12px;line-height:1.45}
+.vidwrap{position:relative;background:#0f172a;border-radius:12px;overflow:hidden;aspect-ratio:3/4}
+#cam{display:block;width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+.hint{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#64748b;font-size:12px;text-align:center;padding:0 16px}
+.state{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;background:var(--soft);border-radius:10px;padding:9px 12px;margin-top:10px}
+.dot{width:9px;height:9px;border-radius:50%;background:#94a3b8;flex:0 0 9px}
+.state.ok .dot{background:var(--ok)}
+.state.warn .dot{background:var(--warn);animation:pulse 1s infinite}
+.state.bad .dot{background:var(--bad);animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.5}}
+.btn{appearance:none;border:none;cursor:pointer;border-radius:10px;padding:11px 16px;font-size:14px;font-weight:700;font-family:inherit;width:100%;margin-top:10px;background:linear-gradient(135deg,#4f46e5,#6366f1);color:#fff}
+.log{margin-top:10px;font-size:11px;color:var(--muted);max-height:110px;overflow:auto}
+.log div{padding:3px 0;border-bottom:1px dashed var(--line)}
+.err{background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:10px;padding:10px;font-size:12px;margin-top:10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><div class="logo">R</div><b>RRCI Nexus Proctor</b></div>
+  <div class="card">
+    <h1>Camera monitoring</h1>
+    <p class="sub">Keep this window open during your coding test. No video is recorded &mdash; a snapshot is captured only if suspicious activity is detected.</p>
+    <div class="vidwrap"><video id="cam" playsinline muted autoplay></video><div class="hint" id="hint">Click Enable camera to begin</div></div>
+    <div class="state" id="state"><span class="dot"></span><span id="state-txt">Camera not started</span></div>
+    <button class="btn" id="btn-enable">Enable camera</button>
+    <div id="err"></div>
+    <div class="log" id="log"></div>
+  </div>
+</div>
+<script>
+(function(){
+  var API='https://rrcinexus.app.n8n.cloud/webhook/rrci-nexus/assessment';
+  function qp(n){var m=new RegExp('[?&]'+n+'=([^&]*)').exec(location.search);return m?decodeURIComponent(m[1].replace(/\+/g,' ')):'';}
+  var token=qp('token'), candidate=qp('candidate');
+  function $(id){return document.getElementById(id);}
+  function setState(cls,txt){var el=$('state');el.className='state'+(cls?(' '+cls):'');$('state-txt').textContent=txt;}
+  function logLine(t){var l=$('log');var d=document.createElement('div');d.textContent=new Date().toLocaleTimeString()+' — '+t;l.insertBefore(d,l.firstChild);}
+  function errBox(m){$('err').innerHTML=m?('<div class="err">'+m+'</div>'):'';}
+
+  var stream=null, video=$('cam'), lastAlert=0, faceDetector=null, monTimer=null;
+  var COOLDOWN=15000;
+
+  function grabJpeg(cb){
+    try{
+      var w=240, h=320; var c=document.createElement('canvas');c.width=w;c.height=h;
+      var ctx=c.getContext('2d');ctx.drawImage(video,0,0,w,h);
+      c.toBlob(function(b){cb(b);}, 'image/jpeg', 0.5);
+    }catch(e){cb(null);}
+  }
+  function sendAlert(alertType, detail){
+    var now=Date.now();
+    if(now-lastAlert<COOLDOWN) return;
+    lastAlert=now;
+    if(!token){logLine('No token — cannot report');return;}
+    grabJpeg(function(blob){
+      var fd=new FormData();
+      fd.append('attemptToken',token);
+      fd.append('alertType',alertType);
+      fd.append('detail',detail||'');
+      if(blob) fd.append('data',blob,'snapshot.jpg');
+      fetch(API+'/proctor-snapshot',{method:'POST',body:fd})
+        .then(function(r){return r.text();})
+        .then(function(){logLine('Alert sent: '+alertType);})
+        .catch(function(){logLine('Alert failed: '+alertType);});
+    });
+  }
+
+  function initFaceDetector(){
+    try{ if('FaceDetector' in window){ faceDetector=new window.FaceDetector({fastMode:true,maxDetectedFaces:5}); return true; } }catch(e){}
+    return false;
+  }
+  function monitorFaces(){
+    if(!faceDetector||!stream) return;
+    faceDetector.detect(video).then(function(faces){
+      if(!faces) return;
+      if(faces.length===0){ setState('warn','No face detected'); sendAlert('no_face','no face visible in frame'); }
+      else if(faces.length>1){ setState('bad',faces.length+' faces detected'); sendAlert('multiple_faces',faces.length+' faces detected in frame'); }
+      else { setState('ok','Monitoring — 1 face'); }
+    }).catch(function(){});
+  }
+
+  document.addEventListener('visibilitychange',function(){ if(document.hidden){ setState('warn','Tab hidden'); sendAlert('tab_switch','proctor/candidate switched tab or minimized'); } });
+  window.addEventListener('blur',function(){ setState('warn','Window lost focus'); sendAlert('window_blur','proctor window lost focus'); });
+
+  function start(){
+    errBox('');
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){errBox('This browser does not support camera access. Use Chrome, Edge or Safari.');return;}
+    navigator.mediaDevices.getUserMedia({video:{width:{ideal:480},height:{ideal:640},facingMode:'user'},audio:false}).then(function(s){
+      stream=s; video.srcObject=s; video.play&&video.play().catch(function(){}); $('hint').style.display='none';
+      $('btn-enable').style.display='none';
+      var hasFace=initFaceDetector();
+      setState('ok', hasFace?'Monitoring active':'Monitoring active (focus-loss only)');
+      logLine('Camera enabled'+(hasFace?' with face detection':' (no FaceDetector in this browser)'));
+      if(hasFace){ if(monTimer)clearInterval(monTimer); monTimer=setInterval(monitorFaces,4000); }
+    }).catch(function(e){
+      var n=(e&&e.name)||'';
+      var msg = (n==='NotAllowedError')?'Camera permission denied. Allow camera and click Enable again.'
+        : (n==='NotReadableError')?'Camera is in use by another app. Close it and retry.'
+        : (n==='NotFoundError')?'No camera found on this device.'
+        : 'Could not access camera'+(n?(' ('+n+')'):'')+'.';
+      errBox(msg); setState('bad','Camera blocked');
+    });
+  }
+  $('btn-enable').addEventListener('click',start);
+  window.addEventListener('pagehide',function(){ if(stream)stream.getTracks().forEach(function(t){t.stop();}); });
+
+  start();
+})();
+</script>
+</body>
+</html>
