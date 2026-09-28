@@ -1,1 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Nexus AI Mock Interview</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #fff; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; }
+    .card { background: #1e293b; border-radius: 12px; padding: 24px; max-width: 600px; width: 100%; box-shadow: 0 10px 25px rgba(0,0,0,0.3); text-align: center; }
+    .video-container { position: relative; width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 8px; overflow: hidden; margin: 16px 0; border: 2px solid #334155; }
+    video { width: 100%; height: 100%; object-fit: cover; }
+    .rec-indicator { display: none; position: absolute; top: 12px; left: 12px; background: rgba(239, 68, 68, 0.9); color: white; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; align-items: center; gap: 6px; }
+    .rec-dot { height: 8px; width: 8px; background: #fff; border-radius: 50%; display: inline-block; animation: pulse 1s infinite; }
+    .controls { display: flex; justify-content: center; gap: 12px; }
+    button { padding: 10px 20px; border-radius: 6px; border: none; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+    .btn-start { background: #10b981; color: white; }
+    .btn-stop { background: #ef4444; color: white; opacity: 0.5; }
+    @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }
+  </style>
+</head>
+<body>
 
+  <div class="card">
+    <h3 id="questionTitle" style="margin-top:0;">Loading Question...</h3>
+    
+    <div class="video-container">
+      <video id="livePreview" autoplay playsinline muted></video>
+      <div id="recordingIndicator" class="rec-indicator">
+        <span class="rec-dot"></span> RECORDING
+      </div>
+    </div>
+
+    <div class="controls">
+      <button id="startBtn" class="btn-start" onclick="startRecording()">Record Answer</button>
+      <button id="stopBtn" class="btn-stop" onclick="stopRecording()" disabled>Stop & Submit</button>
+    </div>
+  </div>
+
+  <script>
+    // Get candidate & question params from URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const candidateId = urlParams.get('candidate') || 'UNKNOWN';
+    const questionId = urlParams.get('question') || '1';
+
+    let mediaStream = null;
+    let mediaRecorder = null;
+    let recordedChunks = [];
+
+    // Initialize Camera on Page Load
+    async function initCamera() {
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        document.getElementById('livePreview').srcObject = mediaStream;
+      } catch (err) {
+        alert("Camera and Microphone access are required for the AI Mock Interview. Please allow permissions in your browser.");
+      }
+    }
+
+    function startRecording() {
+      if (!mediaStream) return alert("Camera feed not ready.");
+      recordedChunks = [];
+      
+      mediaRecorder = new MediaRecorder(mediaStream, { mimeType: 'video/webm' });
+      mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
+      mediaRecorder.onstop = uploadRecording;
+      mediaRecorder.start();
+
+      document.getElementById('recordingIndicator').style.display = 'flex';
+      document.getElementById('startBtn').disabled = true;
+      document.getElementById('stopBtn').disabled = false;
+      document.getElementById('stopBtn').style.opacity = '1';
+    }
+
+    function stopRecording() {
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+        document.getElementById('recordingIndicator').style.display = 'none';
+        document.getElementById('startBtn').disabled = false;
+        document.getElementById('stopBtn').disabled = true;
+        document.getElementById('stopBtn').style.opacity = '0.5';
+      }
+    }
+
+    async function uploadRecording() {
+      const blob = new Blob(recordedChunks, { type: 'video/webm' });
+      const formData = new FormData();
+      formData.append('video_file', blob, 'interview_answer.webm');
+      formData.append('candidate_id', candidateId);
+      formData.append('question_id', questionId);
+
+      try {
+        const res = await fetch('https://rrcinexus.app.n8n.cloud/webhook/rrci-nexus/interview/submit-answer', {
+          method: 'POST',
+          body: formData
+        });
+        if (res.ok) {
+          alert("Answer recorded and submitted for AI evaluation!");
+        } else {
+          alert("Submission error. Please re-record.");
+        }
+      } catch (err) {
+        console.error("Upload error:", err);
+      }
+    }
+
+    window.addEventListener('DOMContentLoaded', initCamera);
+  </script>
+</body>
+</html>
